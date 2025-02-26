@@ -1,5 +1,7 @@
 # Technical Exercise: Product Engineer
 
+## Part 1: Technical Problem Solving
+
 ### Setup
 
 -   This app is using laravel 10
@@ -15,3 +17,7 @@ By this Technical Exercise: Product Engineer, I have been assigned to improved a
 #### Here's the result of benchmark process
 
 ![Benchmark process](./public/benchmark.png)
+
+## Part 2: Product Analysis
+
+### 👉 [Document Product Analysis](https://docs.google.com/document/d/1XH9pU-VAQPWvfM_SEL5TXN09vjPu7HXR8kHiMZs6Y7U/edit?usp=sharing)
