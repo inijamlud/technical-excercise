@@ -67,41 +67,69 @@ class DropOutEnrollments extends Command
      */
     private function dropOutEnrollmentsBefore(Carbon $deadline)
     {
-        $enrollmentsToBeDroppedOut = Enrollment::where('deadline_at', '<=', $deadline)->get();
+        // batch process configure
+        $batchSize = 5000;
 
-        $this->info('Enrollments to be dropped out: ' . count($enrollmentsToBeDroppedOut));
+        // get  total enroll 
+        $enrollmentsToBeDroppedOut = Enrollment::select('id', 'student_id', 'course_id')->where('deadline_at', '<=', $deadline);
+
+        $totalEnrollmentsToBeDroppedOut =  $enrollmentsToBeDroppedOut->count();
+        $this->info('Enrollments to be dropped out: ' . $totalEnrollmentsToBeDroppedOut);
+
         $droppedOutEnrollments = 0;
 
-        foreach ($enrollmentsToBeDroppedOut as $enrollment) {
-            $hasActiveExam = Exam::where('course_id', $enrollment->course_id)
-                ->where('student_id', $enrollment->student_id)
+        // batch process using chunk per batchSize
+        // prevent save big data in one hit
+        $enrollmentsToBeDroppedOut->chunk($batchSize, function ($enrollments) use (&$droppedOutEnrollments) {
+            $studentIds = $enrollments->pluck('student_id')->toArray();
+            $courseIds = $enrollments->pluck('course_id')->toArray();
+
+            $enrollmentStudentMap = $enrollments->pluck('student_id', 'id')->toArray();
+
+            // get exam inProgress and submission waitingReview by studentIds and courseIds
+            $studentsWithExams = Exam::whereIn('course_id', $courseIds)
+                ->whereIn('student_id', $studentIds)
                 ->where('status', 'IN_PROGRESS')
-                ->exists();
+                ->pluck('student_id')
+                ->toArray();
 
-            $hasWaitingReviewSubmission = Submission::where('course_id', $enrollment->course_id)
-                ->where('student_id', $enrollment->student_id)
+            // Get students with pending submissions
+            $studentsWithSubmissions = Submission::whereIn('course_id', $courseIds)
+                ->whereIn('student_id', $studentIds)
                 ->where('status', 'WAITING_REVIEW')
-                ->exists();
+                ->pluck('student_id')
+                ->toArray();
 
-            if ($hasActiveExam || $hasWaitingReviewSubmission) {
-                continue;
+            $studentsToExclude = array_merge($studentsWithExams, $studentsWithSubmissions);
+
+            // Filter enrollments that should be dropped out
+            $dropoutIds = $enrollments->whereNotIn('student_id', $studentsToExclude)->pluck('id')->toArray();
+
+            if (!empty($dropoutIds)) {
+                // Update enrollments to 'DROPOUT'
+                Enrollment::whereIn('id', $dropoutIds)->update([
+                    'status' => 'DROPOUT',
+                    'updated_at' => now(),
+                ]);
+
+                // variable for saving batch activity
+                $activityLogs = [];
+                foreach ($dropoutIds as $id) {
+                    $activityLogs[] = [
+                        'resource_id' => $id,
+                        'user_id' => $enrollmentStudentMap[$id],
+                        'description' => 'COURSE_DROPOUT',
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ];
+                }
+
+                Activity::insert($activityLogs);
+                $droppedOutEnrollments += count($dropoutIds);
             }
+        });
 
-            $enrollment->update([
-                'status' => 'DROPOUT',
-                'updated_at' => now(),
-            ]);
-
-            Activity::create([
-                'resource_id' => $enrollment->id,
-                'user_id' => $enrollment->student_id,
-                'description' => 'COURSE_DROPOUT',
-            ]);
-
-            $droppedOutEnrollments++;
-        }
-
-        $this->info('Excluded from drop out: ' . count($enrollmentsToBeDroppedOut) - $droppedOutEnrollments);
-        $this->info('Final dropped out enrollments: ' . $droppedOutEnrollments);
+        $this->info('Excluded from drop out: ' . $totalEnrollmentsToBeDroppedOut - $droppedOutEnrollments);
+        $this->info("Final dropped out enrollments: {$droppedOutEnrollments}");
     }
 }
